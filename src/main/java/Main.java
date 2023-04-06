@@ -48,11 +48,11 @@ public class Main {
                     String next = scanner.nextLine();
                     System.out.println("next = " + next);
 
-                    if (next.startsWith("ping")) {
+                    if (next.equalsIgnoreCase("PING")) {
                         outputStream.write("+PONG\r\n".getBytes());
-                    } else if (next.startsWith("DOCS")) {
+                    } else if (next.equalsIgnoreCase("DOCS")) {
                         outputStream.write("+\r\n".getBytes());
-                    } else if (next.startsWith("ECHO")) {
+                    } else if (next.equalsIgnoreCase("ECHO")) {
                         isEchoCommand = true;
                     } else if (isEchoCommand && next.matches("^(?![+\\-:$*]).+")) {
                         outputStream.write(("+" + next + "\r\n").getBytes());
