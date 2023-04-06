@@ -1,11 +1,16 @@
 import java.io.IOException;
-import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.Map;
-import java.util.Scanner;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
@@ -18,104 +23,163 @@ public class Main {
         System.out.println("Logs from your program will appear here!");
         final int port = 6379;
 
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            serverSocket.setReuseAddress(true);
+        try (final Selector selector = Selector.open();
+             final ServerSocketChannel serverChannel = ServerSocketChannel.open()
+        ) {
+            serverChannel.bind(new InetSocketAddress("localhost", port));
+            serverChannel.configureBlocking(false);
+            serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+            System.out.println("Server channel listening");
 
             while (true) {
-                Socket clientSocket;
-                try {
-                    clientSocket = serverSocket.accept();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+                selector.select();
+                Iterator<SelectionKey> selectedKeys = selector.selectedKeys().iterator();
 
-                new RedisConnection(clientSocket).start();
+                ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+                while (selectedKeys.hasNext()) {
+                    SelectionKey key = selectedKeys.next();
+
+                    if (key.isValid() == false) {
+                        continue;
+                    }
+
+                    if (key.isAcceptable()) {
+                        acceptConnection(selector, serverChannel);
+                    } else if (key.isReadable()) {
+                        readFromChannel(buffer, key);
+                    }
+
+                    selectedKeys.remove();
+                }
             }
         } catch (Exception e) {
-            System.out.println("error: " + e.getMessage());
+            System.out.println("error: " + Arrays.toString(e.getStackTrace()));
         }
     }
 
-    public static class RedisConnection extends Thread {
+    private static void acceptConnection(Selector selector, ServerSocketChannel serverSocket) throws IOException {
+        SocketChannel clientSocket = serverSocket.accept();
+        clientSocket.configureBlocking(false);
+        clientSocket.register(selector, SelectionKey.OP_READ);
+        System.out.println("client connected");
+    }
 
-        private Socket clientSocket;
+    private static void readFromChannel(ByteBuffer buffer, SelectionKey key) throws IOException {
+        SocketChannel clientSocket = (SocketChannel) key.channel();
+        clientSocket.read(buffer);
+        printBuffer(buffer);
 
-        public RedisConnection(Socket clientSocket) {
-            this.clientSocket = clientSocket;
+        if (buffer.position() == 0) {
+            clientSocket.close();
+            return;
         }
 
-        @Override
-        public void run() {
-            try {
-                Scanner scanner = new Scanner(clientSocket.getInputStream());
-                OutputStream outputStream = clientSocket.getOutputStream();
-                boolean isEchoCommand = false;
-                boolean isSetKey = false;
-                boolean isSetValue = false;
-                boolean isExpiry = false;
-                boolean isGetCommand = false;
-                String key = null;
+        buffer.flip();
+        byte[] data = new byte[buffer.limit()];
+        buffer.get(data);
 
-                while (scanner.hasNext()) {
-                    String next = scanner.nextLine();
-                    System.out.println("next = " + next);
+        RedisCommand redisCommand = new RedisCommand(new String(data));
+        redisCommand.response(clientSocket);
 
-                    if (next.equalsIgnoreCase("PING")) {
-                        outputStream.write("+PONG\r\n".getBytes());
-                    } else if (next.equalsIgnoreCase("DOCS")) {
-                        outputStream.write("+\r\n".getBytes());
-                    } else if (next.equalsIgnoreCase("ECHO")) {
-                        isEchoCommand = true;
-                    } else if (next.equalsIgnoreCase("SET")) {
-                        isSetKey = true;
-                    } else if (next.equalsIgnoreCase("PX")) {
-                        isExpiry = true;
-                    } else if (next.equalsIgnoreCase("GET")) {
-                        isGetCommand = true;
-                    } else if (next.matches("^(?![+\\-:$*]).+")) {
-                        if (isEchoCommand) {
-                            outputStream.write(("+" + next + "\r\n").getBytes());
-                            isEchoCommand = false;
-                        } else if (isSetKey) {
-                            outputStream.write("+OK\r\n".getBytes());
-                            key = next;
-                            isSetValue = true;
-                            isSetKey = false;
-                        } else if (isSetValue && key != null) {
-                            VALUE_STORE.put(key, next);
-                            isSetValue = false;
-                        } else if (isExpiry) {
-                            EXPIRY_STORE.put(key, LocalDateTime.now().plus(Long.parseLong(next), ChronoUnit.MILLIS));
-                            isExpiry = false;
-                        } else if (isGetCommand) {
-                            if (EXPIRY_STORE.containsKey(next)) {
-                                if (LocalDateTime.now().isBefore(EXPIRY_STORE.get(next))) {
-                                    outputStream.write(("+" + VALUE_STORE.get(next) + "\r\n").getBytes());
-                                } else {
-                                    outputStream.write("$-1\r\n".getBytes());
-                                }
-                            } else {
-                                String value = VALUE_STORE.get(next);
-                                if (value != null) {
-                                    outputStream.write(("+" + value + "\r\n").getBytes());
-                                } else {
-                                    outputStream.write("$-1\r\n".getBytes());
-                                }
-                            }
-                            isGetCommand = false;
+        buffer.clear();
+    }
+
+    private static void printBuffer(ByteBuffer buffer) {
+        int limit = buffer.limit();
+        int position = buffer.position();
+        System.out.println("buffer = " + new String(buffer.array()));
+        System.out.println("position = " + position);
+        System.out.println("limit = " + limit);
+    }
+
+    public static class RedisCommand {
+
+        private String command;
+        private String commandKey;
+        private String commandValue;
+
+        private String option;
+        private String optionValue;
+
+        public RedisCommand(String input) {
+            String[] commands = input.trim().split("\r\n");
+            for (int i = 0; i < commands.length; i++) {
+                if (commands[i].matches("^(?![+\\-:$*]).+")) {
+                    String command = commands[i];
+
+                    switch (command.toUpperCase()) {
+                        case "PING":
+                            this.command = "PING";
+                            break;
+                        case "ECHO":
+                            this.command = "ECHO";
+                            this.commandValue = commands[i + 2];
+                            break;
+                        case "DOCS":
+                            this.command = "DOCS";
+                            break;
+                        case "GET":
+                            this.command = "GET";
+                            this.commandKey = commands[i + 2];
+                            break;
+                        case "SET":
+                            this.command = "SET";
+                            this.commandKey = commands[i + 2];
+                            this.commandValue = commands[i + 4];
+                            break;
+                        case "PX":
+                            this.option = "PX";
+                            this.optionValue = commands[i + 2];
+                            break;
+                    }
+                }
+            }
+
+            System.out.println("command = " + command);
+            System.out.println("commandKey = " + commandKey);
+            System.out.println("commandValue = " + commandValue);
+            System.out.println("option = " + option);
+            System.out.println("optionValue = " + optionValue);
+        }
+
+        public void response(SocketChannel clientSocket) throws IOException {
+            switch (command) {
+                case "PING":
+                    clientSocket.write(ByteBuffer.wrap("+PONG\r\n".getBytes()));
+                    break;
+                case "DOCS":
+                    clientSocket.write(ByteBuffer.wrap("+\r\n".getBytes()));
+                    break;
+                case "ECHO":
+                    clientSocket.write(ByteBuffer.wrap(("+" + commandValue + "\r\n").getBytes()));
+                    break;
+                case "GET":
+                    if (EXPIRY_STORE.containsKey(commandKey)) {
+                        if (LocalDateTime.now().isBefore(EXPIRY_STORE.get(commandKey))) {
+                            clientSocket.write(ByteBuffer.wrap(("+" + VALUE_STORE.get(commandKey) + "\r\n").getBytes()));
+                        } else {
+                            clientSocket.write(ByteBuffer.wrap("$-1\r\n".getBytes()));
+                        }
+                    } else {
+                        String value = VALUE_STORE.get(commandKey);
+                        if (value != null) {
+                            clientSocket.write(ByteBuffer.wrap(("+" + VALUE_STORE.get(commandKey) + "\r\n").getBytes()));
+
+                        } else {
+                            clientSocket.write(ByteBuffer.wrap("$-1\r\n".getBytes()));
                         }
                     }
-                }
-            } catch (IOException e) {
-                System.out.println("IOException: " + e.getMessage());
-            } finally {
-                try {
-                    if (clientSocket != null) {
-                        clientSocket.close();
+
+                    break;
+                case "SET":
+                    if (Objects.equals(option, "PX")) {
+                        EXPIRY_STORE.put(commandKey, LocalDateTime.now().plus(Long.parseLong(optionValue), ChronoUnit.MILLIS));
                     }
-                } catch (IOException e) {
-                    System.out.println("IOException: " + e.getMessage());
-                }
+
+                    VALUE_STORE.put(commandKey, commandValue);
+                    clientSocket.write(ByteBuffer.wrap("+OK\r\n".getBytes()));
+                    break;
             }
         }
     }
