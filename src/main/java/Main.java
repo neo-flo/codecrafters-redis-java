@@ -70,12 +70,13 @@ public class Main {
                         if (isEchoCommand) {
                             outputStream.write(("+" + next + "\r\n").getBytes());
                         } else if (isSetKey) {
+                            outputStream.write("+OK\r\n".getBytes());
                             key = next;
                             isSetValue = true;
                             isSetKey = false;
                         } else if (isSetValue && key != null) {
                             STORE.put(key, next);
-                            outputStream.write("+OK\r\n".getBytes());
+                            key = null;
                         } else if (isGetCommand) {
                             String value = STORE.getOrDefault(next, "nil");
                             outputStream.write(("+" + value + "\r\n").getBytes());
