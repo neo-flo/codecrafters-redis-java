@@ -64,20 +64,30 @@ public class Main {
         System.out.println("read buffer = " + new String(buffer.array()));
         printBufferStatus("read buffer", buffer);
 
-        List<String> lines = Arrays.stream(new String(buffer.array()).trim().split("\r\n"))
+        final List<String> lines = Arrays.stream(new String(buffer.array()).trim().split("\r\n"))
                 .collect(Collectors.toList());
+        final StringBuilder result = new StringBuilder();
 
         for (String next : lines) {
-            if (next.startsWith("ping")) {
+            String input = next.trim();
+            System.out.println("input = " + input);
+
+            if (input.startsWith("ping")) {
                 String pong = "+PONG\r\n";
                 clientSocket.write(ByteBuffer.wrap(pong.getBytes()));
-            } else if (next.startsWith("DOCS")) {
+            } else if (input.startsWith("DOCS")) {
                 clientSocket.write(ByteBuffer.wrap("+\r\n".getBytes()));
+            } else if (input.matches("^(?![+\\-:$*]).+")) {
+                result.append(next).append(" ");
             }
         }
 
+        if (result.length() > 0) {
+            clientSocket.write(ByteBuffer.wrap(("+" + result.toString().trim() + "\r\n").getBytes()));
+        }
+
         buffer.clear();
-        System.out.println("client connected");
+        System.out.println("client closed");
         clientSocket.close();
     }
 
