@@ -2,9 +2,13 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Map;
 import java.util.Scanner;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
+
+    private static final Map<String, String> STORE = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -43,6 +47,10 @@ public class Main {
                 Scanner scanner = new Scanner(clientSocket.getInputStream());
                 OutputStream outputStream = clientSocket.getOutputStream();
                 boolean isEchoCommand = false;
+                boolean isSetKey = false;
+                boolean isSetValue = false;
+                boolean isGetCommand = false;
+                String key = null;
 
                 while (scanner.hasNext()) {
                     String next = scanner.nextLine();
@@ -54,8 +62,24 @@ public class Main {
                         outputStream.write("+\r\n".getBytes());
                     } else if (next.equalsIgnoreCase("ECHO")) {
                         isEchoCommand = true;
-                    } else if (isEchoCommand && next.matches("^(?![+\\-:$*]).+")) {
-                        outputStream.write(("+" + next + "\r\n").getBytes());
+                    } else if (next.equalsIgnoreCase("SET")) {
+                        isSetKey = true;
+                    } else if (next.equalsIgnoreCase("GET")) {
+                        isGetCommand = true;
+                    } else if (next.matches("^(?![+\\-:$*]).+")) {
+                        if (isEchoCommand) {
+                            outputStream.write(("+" + next + "\r\n").getBytes());
+                        } else if (isSetKey) {
+                            key = next;
+                            isSetValue = true;
+                            isSetKey = false;
+                        } else if (isSetValue && key != null) {
+                            STORE.put(key, next);
+                            outputStream.write("+OK\r\n".getBytes());
+                        } else if (isGetCommand) {
+                            String value = STORE.getOrDefault(next, "nil");
+                            outputStream.write(("+" + value + "\r\n").getBytes());
+                        }
                     }
                 }
             } catch (IOException e) {
