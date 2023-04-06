@@ -42,18 +42,20 @@ public class Main {
             try {
                 Scanner scanner = new Scanner(clientSocket.getInputStream());
                 OutputStream outputStream = clientSocket.getOutputStream();
-                StringBuilder input = new StringBuilder();
+                boolean isEchoCommand = false;
 
                 while (scanner.hasNext()) {
                     String next = scanner.nextLine();
                     System.out.println("next = " + next);
-                    input.append(next);
 
                     if (next.startsWith("ping")) {
-                        String pong = "+PONG\r\n";
-                        outputStream.write(pong.getBytes());
+                        outputStream.write("+PONG\r\n".getBytes());
                     } else if (next.startsWith("DOCS")) {
                         outputStream.write("+\r\n".getBytes());
+                    } else if (next.startsWith("ECHO")) {
+                        isEchoCommand = true;
+                    } else if (isEchoCommand && next.matches("^(?![+\\-:$*]).+")) {
+                        outputStream.write(("+" + next + "\r\n").getBytes());
                     }
                 }
             } catch (IOException e) {
