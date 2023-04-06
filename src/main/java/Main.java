@@ -75,6 +75,7 @@ public class Main {
                     } else if (next.matches("^(?![+\\-:$*]).+")) {
                         if (isEchoCommand) {
                             outputStream.write(("+" + next + "\r\n").getBytes());
+                            isEchoCommand = false;
                         } else if (isSetKey) {
                             outputStream.write("+OK\r\n".getBytes());
                             key = next;
@@ -85,6 +86,7 @@ public class Main {
                             isSetValue = false;
                         } else if (isExpiry) {
                             EXPIRY_STORE.put(key, LocalDateTime.now().plus(Long.parseLong(next), ChronoUnit.MILLIS));
+                            isExpiry = false;
                         } else if (isGetCommand) {
                             if (EXPIRY_STORE.containsKey(next)) {
                                 if (LocalDateTime.now().isBefore(EXPIRY_STORE.get(next))) {
@@ -100,6 +102,7 @@ public class Main {
                                     outputStream.write("$-1\r\n".getBytes());
                                 }
                             }
+                            isGetCommand = false;
                         }
                     }
                 }
