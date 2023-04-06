@@ -2,13 +2,16 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
 
-    private static final Map<String, String> STORE = new ConcurrentHashMap<>();
+    private static final Map<String, String> VALUE_STORE = new ConcurrentHashMap<>();
+    private static final Map<String, LocalDateTime> EXPIRY_STORE = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -49,6 +52,7 @@ public class Main {
                 boolean isEchoCommand = false;
                 boolean isSetKey = false;
                 boolean isSetValue = false;
+                boolean isExpiry = false;
                 boolean isGetCommand = false;
                 String key = null;
 
@@ -64,6 +68,8 @@ public class Main {
                         isEchoCommand = true;
                     } else if (next.equalsIgnoreCase("SET")) {
                         isSetKey = true;
+                    } else if (next.equalsIgnoreCase("PX")) {
+                        isExpiry = true;
                     } else if (next.equalsIgnoreCase("GET")) {
                         isGetCommand = true;
                     } else if (next.matches("^(?![+\\-:$*]).+")) {
@@ -75,11 +81,25 @@ public class Main {
                             isSetValue = true;
                             isSetKey = false;
                         } else if (isSetValue && key != null) {
-                            STORE.put(key, next);
-                            key = null;
+                            VALUE_STORE.put(key, next);
+                            isSetValue = false;
+                        } else if (isExpiry) {
+                            EXPIRY_STORE.put(key, LocalDateTime.now().plus(Long.parseLong(next), ChronoUnit.MILLIS));
                         } else if (isGetCommand) {
-                            String value = STORE.getOrDefault(next, "nil");
-                            outputStream.write(("+" + value + "\r\n").getBytes());
+                            if (EXPIRY_STORE.containsKey(next)) {
+                                if (LocalDateTime.now().isBefore(EXPIRY_STORE.get(next))) {
+                                    outputStream.write(("+" + VALUE_STORE.get(next) + "\r\n").getBytes());
+                                } else {
+                                    outputStream.write("$-1\r\n".getBytes());
+                                }
+                            } else {
+                                String value = VALUE_STORE.get(next);
+                                if (value != null) {
+                                    outputStream.write(("+" + value + "\r\n").getBytes());
+                                } else {
+                                    outputStream.write("$-1\r\n".getBytes());
+                                }
+                            }
                         }
                     }
                 }
