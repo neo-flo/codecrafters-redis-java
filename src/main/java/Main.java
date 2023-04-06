@@ -1,87 +1,72 @@
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Scanner;
 
 public class Main {
 
-    public static void main(String[] args) throws IOException, InterruptedException {
+    public static void main(String[] args) {
+        // You can use print statements as follows for debugging, they'll be visible when running tests.
+        System.out.println("Logs from your program will appear here!");
         final int port = 6379;
 
-        Selector selector = Selector.open();
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            serverSocket.setReuseAddress(true);
 
-        ServerSocketChannel serverSocket = ServerSocketChannel.open();
-        serverSocket.bind(new InetSocketAddress("localhost", port));
-        serverSocket.configureBlocking(false);
-
-        serverSocket.register(selector, SelectionKey.OP_ACCEPT);
-        System.out.println("server listening");
-
-        ByteBuffer buffer = ByteBuffer.allocate(256);
-        printBufferStatus("init buffer", buffer);
-
-        while (true) {
-            selector.select();
-
-            Set<SelectionKey> selectedKeys = selector.selectedKeys();
-            System.out.println("selectedKeys = " + selectedKeys);
-            Iterator<SelectionKey> iterator = selectedKeys.iterator();
-
-            while (iterator.hasNext()) {
-                SelectionKey key = iterator.next();
-                if (key.isAcceptable()) {
-                    register(selector, serverSocket);
+            while (true) {
+                Socket clientSocket;
+                try {
+                    clientSocket = serverSocket.accept();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
                 }
 
-                if (key.isReadable()) {
-                    read(buffer, key);
-                }
-
-                iterator.remove();
+                new RedisConnection(clientSocket).start();
             }
+        } catch (Exception e) {
+            System.out.println("error: " + e.getMessage());
         }
     }
 
-    private static void register(Selector selector, ServerSocketChannel serverSocket) throws IOException {
-        SocketChannel clientSocket = serverSocket.accept();
-        clientSocket.configureBlocking(false);
-        clientSocket.register(selector, SelectionKey.OP_READ);
-        System.out.println("client connected");
-    }
+    public static class RedisConnection extends Thread {
 
-    private static void read(ByteBuffer buffer, SelectionKey key) throws IOException, InterruptedException {
-        SocketChannel clientSocket = (SocketChannel) key.channel();
-        clientSocket.read(buffer);
+        private Socket clientSocket;
 
-        System.out.println("read buffer = " + new String(buffer.array()));
-        printBufferStatus("read buffer", buffer);
-
-        List<String> lines = Arrays.stream(new String(buffer.array()).trim().split("\r\n"))
-                .collect(Collectors.toList());
-
-        for (String next : lines) {
-            if (next.startsWith("ping")) {
-                String pong = "+PONG\r\n";
-                clientSocket.write(ByteBuffer.wrap(pong.getBytes()));
-            } else if (next.startsWith("DOCS")) {
-                clientSocket.write(ByteBuffer.wrap("+\r\n".getBytes()));
-            }
+        public RedisConnection(Socket clientSocket) {
+            this.clientSocket = clientSocket;
         }
 
-        buffer.clear();
-        System.out.println("client connected");
-        clientSocket.close();
-    }
+        @Override
+        public void run() {
+            try {
+                Scanner scanner = new Scanner(clientSocket.getInputStream());
+                OutputStream outputStream = clientSocket.getOutputStream();
+                StringBuilder input = new StringBuilder();
 
-    private static void printBufferStatus(String name, ByteBuffer buffer) {
-        System.out.println(name + " : position[" + buffer.position() + "] Limit[" + buffer.limit() + "] Capacity[" + buffer.capacity() + "]");
+                while (scanner.hasNext()) {
+                    String next = scanner.nextLine();
+                    System.out.println("next = " + next);
+                    input.append(next);
+
+                    if (next.startsWith("ping")) {
+                        String pong = "+PONG\r\n";
+                        outputStream.write(pong.getBytes());
+                    } else if (next.startsWith("DOCS")) {
+                        outputStream.write("+\r\n".getBytes());
+                    }
+                }
+            } catch (IOException e) {
+                System.out.println("IOException: " + e.getMessage());
+            } finally {
+                try {
+                    if (clientSocket != null) {
+                        clientSocket.close();
+                    }
+                } catch (IOException e) {
+                    System.out.println("IOException: " + e.getMessage());
+                }
+            }
+        }
     }
 }
